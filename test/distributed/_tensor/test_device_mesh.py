@@ -312,11 +312,8 @@ class DeviceMeshCollectiveTest(DTensorTestBase):
             output_size[dim] *= self.world_size
             # each rank have its own tensor, all_gather gives a list
             local_tensor = torch.ones(3, 3, device=self.device_type)
-            gathered_list = []
-            for _ in range(self.world_size):
-                gathered_list.append(torch.zeros_like(local_tensor))
-            mesh.all_gather(gathered_list, local_tensor, mesh_dim=0)
-            gathered_tensor = torch.cat(gathered_list, dim=dim)
+            gathered_tensor = mesh.all_gather(local_tensor, mesh_dim=0)
+            gathered_tensor = torch.cat(torch.chunk(gathered_tensor, self.world_size), dim=dim)
             self.assertEqual(gathered_tensor, torch.ones(output_size))
 
     @with_comms
@@ -338,15 +335,11 @@ class DeviceMeshCollectiveTest(DTensorTestBase):
                 contiguous=True,
             )
             local_tensor = tensor_padded_list[my_rank]
-            gathered_list = []
-            for _ in range(device_mesh.size()):
-                gathered_list.append(torch.empty_like(local_tensor))
-
-            device_mesh.all_gather(
-                gathered_list,
+            big_tensor = device_mesh.all_gather(
                 local_tensor,
                 mesh_dim=0,
             )
+            gathered_list = big_tensor.chunk(self.world_size)
             if pad_idx != 0:
                 gathered_list = [
                     shard_placement._unpad_tensor(gathered_tensor)
@@ -428,16 +421,9 @@ class DeviceMeshCollectiveTest(DTensorTestBase):
         dim_to_subgroups = mesh.get_dim_groups()
         for dim, dim_group in enumerate(dim_to_subgroups):
             dim_group_size = get_world_size(dim_group)
-            global_ranks = [
-                get_global_rank(dim_group, i) for i in range(dim_group_size)
-            ]
-            gathered_tensor_list = list(
-                torch.empty(
-                    (dim_group_size * 3, 3), device=self.device_type
-                ).tensor_split(dim_group_size, dim=0)
-            )
-            mesh.all_gather(gathered_tensor_list, local_tensor, mesh_dim=dim)
-            gathered_tensor = torch.cat(gathered_tensor_list)
+            global_ranks = get_process_group_ranks(dim_group)
+
+            gathered_tensor = mesh.all_gather(local_tensor, mesh_dim=dim) * 1
             exp_tensor = torch.ones(3 * dim_group_size, 3)
             for i in range(len(global_ranks)):
                 exp_tensor[i * 3 : (i + 1) * 3] = torch.ones(3, 3) * global_ranks[i]

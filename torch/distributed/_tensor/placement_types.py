@@ -183,21 +183,10 @@ class Shard(Placement):
         if pad_idx != 0 and my_coordinate[mesh_dim] >= pad_idx:
             local_tensor = self._pad_tensor(local_tensor).contiguous()
 
-        gathered_list = []
-        # N.B. CommTensor does not change eager mode behavior. During tracing, it
-        # makes sure communication result is properly waited before subsequent
-        # read operations.
-        for _ in range(num_chunks):
-            gathered_list.append(
-                CommTensor(
-                    torch.empty_like(
-                        local_tensor,
-                        memory_format=torch.contiguous_format,
-                    )
-                )
-            )
+        big_tensor = mesh.all_gather(local_tensor, mesh_dim=mesh_dim)
+        # unpack the big tensor (TODO skil all of this if pad_idx == 0 and dim == 0)
+        gathered_list = torch.split(big_tensor, num_chunks)
 
-        mesh.all_gather(gathered_list, CommTensor(local_tensor.contiguous()), mesh_dim=mesh_dim)  # type: ignore[arg-type]
         # unpad the tensor if the input tensor was padded
         if pad_idx != 0:
             gathered_list = [

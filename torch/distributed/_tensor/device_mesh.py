@@ -6,7 +6,6 @@ from typing import List, Optional, Sequence, TypeVar, Union
 import torch
 from torch.distributed.distributed_c10d import (
     _get_default_group,
-    all_gather,
     all_to_all,
     broadcast,
     get_global_rank,
@@ -393,11 +392,9 @@ class DeviceMesh:
 
     def all_gather(
         self,
-        tensor_list: List[torch.Tensor],
         tensor: torch.Tensor,
         mesh_dim: int = 0,
-        async_op: bool = False,
-    ) -> Optional[Work]:
+    ) -> torch.Tensor:
         """
         all_gather the tensor on each rank to the tensor_list on a
         device mesh dimension.
@@ -413,7 +410,7 @@ class DeviceMesh:
             A :class:`Work` object
         """
         dim_group = self._dim_groups[mesh_dim]
-        return all_gather(tensor_list, tensor, group=dim_group, async_op=async_op)
+        return funcol.all_gather_tensor(tensor, gather_dim=0, group=dim_group)
 
     def all_reduce(
         self,
