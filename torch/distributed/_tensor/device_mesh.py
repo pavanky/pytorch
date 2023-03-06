@@ -16,13 +16,11 @@ from torch.distributed.distributed_c10d import (
     is_initialized,
     new_group,
     ProcessGroup,
-    reduce_scatter,
     ReduceOp,
     scatter,
     Work,
 )
 
-import torch.distributed.distributed_c10d as c10d
 import torch.distributed._functional_collectives as funcol
 
 _global_device_mesh: Optional["DeviceMesh"] = None
@@ -439,19 +437,16 @@ class DeviceMesh:
 
     def reduce_scatter(
         self,
-        output: torch.Tensor,
-        input_list: List[torch.Tensor],
+        input: torch.Tensor,
         op: ReduceOp = ReduceOp.SUM,  # type: ignore[assignment]
         mesh_dim: int = 0,
-        async_op: bool = False,
-    ) -> Optional[Work]:
+    ) -> torch.Tensor:
         """
-        reduce the input_list on each rank on a device mesh dimension, and scatter
+        reduce the input on each rank on a device mesh dimension, and scatter
         the results to the output tensor on each rank.
 
         Args:
-            output (torch.Tensor): tensor to receive the scattered result.
-            input_list (List[torch.Tensor]): tensor list to be reduced and scattered
+            input (torch.Tensor): tensor to be reduced and scattered
                 and scattered on each rank.
             op (:class:`torch.distributed.distributed_c10d.ReduceOp, optional):
                 the reduction op of reduce_scatter (i.e. ReduceOp.SUM)
@@ -459,13 +454,30 @@ class DeviceMesh:
                 to scatter on.
 
         Returns:
-            A :class:`Work` object
+            A :class:`torch.Tensor` object
         """
-        if self._backend == "nccl":
-            dim_group = self._dim_groups[mesh_dim]
-            fut = reduce_scatter(
-                output, input_list, op=op, group=dim_group, async_op=async_op
+        op_name: str = op.name  # type: ignore[attr-defined]
+        my_coordinate = self.get_coordinate()
+        # TODO: what should happen if rank is not in the mesh?
+        # see issue https://github.com/pytorch/tau/pull/492
+        assert (
+            my_coordinate is not None
+        ), "Rank if not part of mesh"  # TODO: figure out behavior here
+
+        num_chunks = self.size(dim=mesh_dim)
+        needs_padding = False
+        if input.size(0) % num_chunks != 0:
+            from torch.distributed._tensor.placement_types import Shard
+            shard = Shard(0)
+            scattered_list, pad_idx = shard._split_tensor(
+                input, num_chunks, with_padding=True, contiguous=True
             )
+            input = torch.cat(scattered_list)
+            needs_padding = True
+
+        if self._backend == "nccl" or self._backend == "threaded":
+            dim_group = self._dim_groups[mesh_dim]
+            scatter_tensor = funcol.reduce_scatter_tensor(input, reduceOp=op_name, scatter_dim=0, group=dim_group)
 
         elif self._backend == "gloo":
             # it's gloo, which does not have reduce_scatter
@@ -473,41 +485,20 @@ class DeviceMesh:
             warnings.warn(
                 "ProcessGroupGloo does not support reduce_scatter, falling back with all reduce!"
             )
-            my_coordinate = self.get_coordinate()
-            # TODO: what should happen if rank is not in the mesh?
-            # see issue https://github.com/pytorch/tau/pull/492
-            assert (
-                my_coordinate is not None
-            ), "Rank if not part of mesh"  # TODO: figure out behavior here
-            fut = None
-            flattened_list = []
-            offset_list = []
-
-            offset = 0
-            for input in input_list:
-                offset_list.append(offset)
-                offset += input.numel()
-                flattened_list.append(input.flatten())
-
-            # all reduce since gloo does not support reduce_scatter
-            flat_tensor = torch.cat(flattened_list).clone(
-                memory_format=torch.contiguous_format
-            )
             dim_group = self._dim_groups[mesh_dim]
-            fut = c10d.all_reduce(flat_tensor, op=op, group=dim_group, async_op=async_op)
-
-            # scatter the tensor
-            output_offset = offset_list[my_coordinate[mesh_dim]]
-            output.copy_(
-                flat_tensor[output_offset : output_offset + output.numel()].view(
-                    output.shape
-                )
-            )
+            flat_tensor = funcol.all_reduce(input, reduceOp=op_name, group=dim_group)
+            chunks = flat_tensor.chunk(get_world_size(dim_group))
+            scatter_tensor = chunks[get_rank(dim_group)]
         else:
             raise RuntimeError(
                 f"backend {self._backend} does not support reduce_scatter!"
             )
-        return fut
+
+        if needs_padding:
+            if pad_idx != 0 and my_coordinate[mesh_dim] >= pad_idx:
+                scatter_tensor = shard._unpad_tensor(scatter_tensor)
+
+        return scatter_tensor
 
     # TODO: test uneven split on GLOO and NCCL
     def all_to_all(

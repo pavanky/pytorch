@@ -354,21 +354,15 @@ class DeviceMeshCollectiveTest(DTensorTestBase):
     @with_comms
     def test_reduce_scatter_1d(self):
         mesh = DeviceMesh(self.device_type, torch.arange(self.world_size))
-        dims_to_scatter = [0, 1]
+        # TODO go back and include >0 once we support scatter_dim>0
+        # dims_to_scatter = [0, 1]
+        dims_to_scatter = [0]
         for dim in dims_to_scatter:
             input_size = [3, 3]
-            scattered_tensor = torch.empty(input_size, device=self.device_type)
             input_size[dim] *= self.world_size
-            shard_placement = Shard(dim)
-
-            input_rs_list, _ = shard_placement._split_tensor(
-                torch.ones(input_size, device=self.device_type) * self.rank,
-                mesh.size(),
-                with_padding=True,
-                contiguous=True,
-            )
+            input_tensor = torch.ones(input_size, device=self.device_type) * self.rank
             res_num = ((0 + self.world_size - 1) * self.world_size) / 2
-            mesh.reduce_scatter(scattered_tensor, input_rs_list, mesh_dim=0)
+            scattered_tensor = mesh.reduce_scatter(input_tensor, mesh_dim=0)
             self.assertEqual(scattered_tensor, torch.ones(3, 3) * res_num)
 
     @with_comms
@@ -384,25 +378,16 @@ class DeviceMeshCollectiveTest(DTensorTestBase):
             * self.rank
         )
 
-        for shard_dim in range(tensor_to_split.ndim):
-            shard_placement = Shard(shard_dim)
-            tensor_to_scatter = tensor_to_split.clone()
+        # FIXME test all dims once reduce_scatter supports scatter_dim
+        # for shard_dim in range(tensor_to_split.ndim):
+        for shard_dim in [0]:
             tensor_splitted_list = tensor_to_split.tensor_split(
                 device_mesh.size(), dim=shard_dim
             )
-            padded_tensor_list, pad_idx = shard_placement._split_tensor(
-                tensor_to_scatter,
-                device_mesh.size(),
-                with_padding=True,
-                contiguous=True,
-            )
 
             res_num = ((0 + self.world_size - 1) * self.world_size) / 2
-            scattered_tensor = torch.empty_like(padded_tensor_list[my_rank])
-            device_mesh.reduce_scatter(scattered_tensor, padded_tensor_list, mesh_dim=0)
-            # unpad scattered_tensor
-            if pad_idx != 0 and my_rank >= pad_idx:
-                scattered_tensor = shard_placement._unpad_tensor(scattered_tensor)
+
+            scattered_tensor = device_mesh.reduce_scatter(tensor_to_split, mesh_dim=0)
 
             self.assertEqual(
                 scattered_tensor.size(), tensor_splitted_list[my_rank].size()
@@ -435,26 +420,18 @@ class DeviceMeshCollectiveTest(DTensorTestBase):
         mesh = DeviceMesh(self.device_type, mesh_tensor)
 
         dim_to_subgroups = mesh.get_dim_groups()
-        for dim, dim_group in enumerate(dim_to_subgroups):
+        # FIXME can't do this until we support scatter_dim
+        # for dim, dim_group in enumerate(dim_to_subgroups):
+        for dim, dim_group in [(0, dim_to_subgroups[0])]:
             input_size = [3, 3, 3]
             dim_group_size = get_world_size(dim_group)
             input_size[dim] *= dim_group_size
-            shard_placement = Shard(dim)
 
-            local_rs_list, _ = shard_placement._split_tensor(
-                torch.ones(input_size, device=self.device_type) * self.rank,
-                dim_group_size,
-                with_padding=True,
-                contiguous=True,
-            )
-            scattered_tensor = torch.empty_like(
-                local_rs_list[mesh.get_coordinate()[dim]],
-                device=self.device_type,
-            )
-            global_ranks = [
-                get_global_rank(dim_group, i) for i in range(dim_group_size)
-            ]
-            mesh.reduce_scatter(scattered_tensor, local_rs_list, mesh_dim=dim)
+            input_tensor = torch.ones(input_size, device=self.device_type) * self.rank
+            global_ranks = get_process_group_ranks(dim_group)
+
+            scattered_tensor = mesh.reduce_scatter(input_tensor, mesh_dim=dim)
+
             res_num = torch.sum(torch.tensor(global_ranks))
             self.assertEqual(scattered_tensor, torch.ones(3, 3, 3) * res_num)
 

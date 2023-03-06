@@ -5,7 +5,6 @@ from typing import cast, List, Optional, Sequence, Tuple
 
 import torch
 import torch.distributed.distributed_c10d as c10d
-from torch.distributed._spmd.comm_tensor import CommTensor
 
 from torch.distributed._tensor.device_mesh import DeviceMesh
 from torch.fx.passes.shape_prop import TensorMetadata
@@ -138,27 +137,12 @@ class Shard(Placement):
         reduce and scatter a tensor on a mesh dimension
         """
         my_coordinate = mesh.get_coordinate()
-        num_chunks = mesh.size(dim=mesh_dim)
         # TODO: what should happen if rank is not in the mesh?
         # see issue https://github.com/pytorch/tau/pull/492
         assert (
             my_coordinate is not None
         ), "Rank if not part of mesh"  # TODO: figure out behavior here
-        scattered_list, pad_idx = self._split_tensor(
-            tensor, num_chunks, with_padding=True, contiguous=True
-        )
-        # wrap with comm tensor
-        scattered_list = [CommTensor(t) for t in scattered_list]
-        output = torch.empty_like(scattered_list[my_coordinate[mesh_dim]])
-        mesh.reduce_scatter(
-            CommTensor(output),
-            scattered_list,  # pyre-ignore[6]
-            op=reduce_op,
-            mesh_dim=mesh_dim,
-        )
-        if pad_idx != 0 and my_coordinate[mesh_dim] >= pad_idx:
-            output = self._unpad_tensor(output)
-        return output
+        return mesh.reduce_scatter(tensor, op=reduce_op, mesh_dim=mesh_dim)
 
     def _to_replicate_tensor(
         self,
