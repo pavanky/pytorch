@@ -5,6 +5,7 @@ import itertools
 import logging
 import operator
 import re
+import sys
 import traceback
 from dataclasses import dataclass
 from typing import Any, Dict, List, NamedTuple, Optional, OrderedDict, Set, Union
@@ -352,6 +353,7 @@ class OutputGraph(fx.Tracer, Checkpointable[OutputGraphState]):
             return proxy
 
     def new_var(self, name="tmp"):
+        # TODO verify code_options modification
         existing = set(self.code_options["co_varnames"])
         for i in itertools.count():
             var = f"___{name}_{i}"
@@ -487,6 +489,26 @@ class OutputGraph(fx.Tracer, Checkpointable[OutputGraphState]):
         if not all(block.can_restore() for block in tx.block_stack):
             unimplemented("compile_subgraph with block_depth != 0")
 
+        prefix_insts = []
+        if sys.version_info >= (3, 11):
+            # prefix instructions (Python 3.11+)
+            for inst in tx.prefix_insts:
+                if inst.opname == "MAKE_CELL":
+                    prefix_insts.append(
+                        create_instruction("MAKE_CELL", inst.argval)
+                    )
+                elif inst.opname == "COPY_FREE_VARS":
+                    prefix_insts.append(
+                        create_instruction(
+                            "COPY_FREE_VARS", len(tx.code_options["co_freevars"])
+                        )
+                    )
+                else:
+                    prefix_insts.append(inst)
+        def append_prefix_insts():
+            self.add_output_instructions(prefix_insts)
+            prefix_insts.clear()
+
         for block in reversed(tx.block_stack):
             block.exit(tx)
 
@@ -514,6 +536,7 @@ class OutputGraph(fx.Tracer, Checkpointable[OutputGraphState]):
 
         # to handle random calls
         if len(tx.random_calls) > 0:
+            append_prefix_insts()
             random_calls_instructions = []
             self.random_values_var = self.new_var("random_values")
             rand_fn_name = unique_id("__gen_rand_values")
@@ -546,6 +569,7 @@ class OutputGraph(fx.Tracer, Checkpointable[OutputGraphState]):
             and len(set(stack_values)) == len(stack_values)
             and self.side_effects.is_empty()
         ):
+            append_prefix_insts()
             # optimization to generate better code in a common case
             self.add_output_instructions(
                 self.compile_and_call_fx_graph(tx, list(reversed(stack_values)), root)
@@ -579,6 +603,7 @@ class OutputGraph(fx.Tracer, Checkpointable[OutputGraphState]):
                     output.append(pass2.create_store(graph_output_var))
                 else:
                     output.append(create_instruction("POP_TOP"))
+            append_prefix_insts()
             self.add_output_instructions(output + pass2.get_instructions())
 
         # restore all the live local vars

@@ -6,9 +6,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .bytecode_transformation import (
     create_call_function,
+    create_call_method,
+    create_dup_top,
     create_instruction,
     create_jump_absolute,
     Instruction,
+    instruction_size,
+    offset_exception_table,
     transform_code_object,
     unique_id,
 )
@@ -38,12 +42,10 @@ class ReenterWith:
     def try_except(self, code_options, cleanup: List[Instruction]):
         load_args = []
         if self.target_values:
+            for val in self.target_values:
+                PyCodegen.maybe_upd_consts(code_options, val)
             load_args = [
-                create_instruction(
-                    "LOAD_CONST",
-                    PyCodegen.get_const_index(code_options, val),
-                    val,
-                )
+                create_instruction("LOAD_CONST", val)
                 for val in self.target_values
             ]
         ctx_name = unique_id(f"___context_manager_{self.stack_index}")
@@ -58,7 +60,7 @@ class ReenterWith:
 
         setup_finally = [
             *load_args,
-            create_instruction("CALL_FUNCTION", len(load_args)),
+            *create_call_function(len(load_args), True),
             create_instruction(
                 "STORE_FAST", code_options["co_varnames"].index(ctx_name), ctx_name
             ),
@@ -66,22 +68,26 @@ class ReenterWith:
                 "LOAD_FAST", code_options["co_varnames"].index(ctx_name), ctx_name
             ),
             create_instruction("LOAD_METHOD", "__enter__"),
-            create_instruction("CALL_METHOD", 0),
+            *create_call_method(0),
             create_instruction("POP_TOP"),
-            create_instruction("SETUP_FINALLY", target=except_jump_target),
         ]
+        if sys.version_info < (3, 11):
+            setup_finally.append(
+                # NOTE: SETUP_FINALLY is not present in 3.11, but we will
+                # later replace with it with a NOP and update the exception table.
+                create_instruction("SETUP_FINALLY", target=except_jump_target)
+            )
 
+        PyCodegen.maybe_upd_consts(code_options, None)
         reset = [
             create_instruction(
                 "LOAD_FAST", code_options["co_varnames"].index(ctx_name), ctx_name
             ),
             create_instruction("LOAD_METHOD", "__exit__"),
-            create_instruction(
-                "LOAD_CONST", PyCodegen.get_const_index(code_options, None), None
-            ),
-            create_instruction("DUP_TOP"),
-            create_instruction("DUP_TOP"),
-            create_instruction("CALL_METHOD", 3),
+            create_instruction("LOAD_CONST", None),
+            create_dup_top(),
+            create_dup_top(),
+            *create_call_method(3),
             create_instruction("POP_TOP"),
         ]
         if sys.version_info < (3, 9):
@@ -92,7 +98,7 @@ class ReenterWith:
                 *reset,
                 create_instruction("END_FINALLY"),
             ]
-        else:
+        elif sys.version_info < (3, 11):
             epilogue = [
                 create_instruction("POP_BLOCK"),
                 *reset,
@@ -102,6 +108,19 @@ class ReenterWith:
                 create_instruction("RERAISE"),
                 cleanup_complete_jump_target,
             ]
+        else:
+            epilogue = [
+                *reset,
+                create_instruction("JUMP_FORWARD", target=cleanup_complete_jump_target),
+                except_jump_target,
+                create_instruction("PUSH_EXC_INFO"),
+                *reset,
+                create_instruction("RERAISE", 0),
+                create_instruction("COPY", 3),
+                create_instruction("POP_EXCEPT"),
+                create_instruction("RERAISE", 1),
+                cleanup_complete_jump_target,
+            ]
 
         cleanup[:] = epilogue + cleanup
         return setup_finally
@@ -109,13 +128,10 @@ class ReenterWith:
     def __call__(self, code_options, cleanup):
         load_args = []
         if self.target_values:
+            for val in self.target_values:
+                PyCodegen.maybe_upd_consts(code_options, val)
             load_args = [
-                create_instruction(
-                    "LOAD_CONST",
-                    PyCodegen.get_const_index(code_options, val),
-                    val,
-                )
-                for val in self.target_values
+                create_instruction("LOAD_CONST", val) for val in self.target_values
             ]
         if sys.version_info < (3, 9):
             with_cleanup_start = create_instruction("WITH_CLEANUP_START")
@@ -140,11 +156,10 @@ class ReenterWith:
 
             cleanup_complete_jump_target = create_instruction("NOP")
 
+            PyCodegen.maybe_upd_consts(code_options, None)
             cleanup[:] = [
                 create_instruction("POP_BLOCK"),
-                create_instruction(
-                    "LOAD_CONST", PyCodegen.get_const_index(code_options, None), None
-                ),
+                create_instruction("LOAD_CONST", None),
                 create_instruction("DUP_TOP"),
                 create_instruction("DUP_TOP"),
                 create_instruction("CALL_FUNCTION", 3),
@@ -173,43 +188,38 @@ class ReenterWith:
             pop_top_after_with_except_start = create_instruction("POP_TOP")
             cleanup_complete_jump_target = create_instruction("NOP")
 
+            PyCodegen.maybe_upd_consts(code_options, None)
+
             def create_load_none():
-                return create_instruction(
-                    "LOAD_CONST", PyCodegen.get_const_index(code_options, None), None
-                )
+                return create_instruction("LOAD_CONST", None)
 
-            cleanup[:] = (
-                [
-                    create_load_none(),
-                    create_load_none(),
-                    create_load_none(),
-                ]
-                + create_call_function(2, False)
-                + [
-                    create_instruction("POP_TOP"),
-                    create_instruction(
-                        "JUMP_FORWARD", target=cleanup_complete_jump_target
-                    ),
-                    create_instruction("PUSH_EXC_INFO"),
-                    create_instruction("WITH_EXCEPT_START"),
-                    create_instruction(
-                        "POP_JUMP_FORWARD_IF_TRUE",
-                        target=pop_top_after_with_except_start,
-                    ),
-                    create_instruction("RERAISE", 2),
-                    create_instruction("COPY", 3),
-                    create_instruction("POP_EXCEPT"),
-                    create_instruction("RERAISE", 1),
-                    pop_top_after_with_except_start,
-                    create_instruction("POP_EXCEPT"),
-                    create_instruction("POP_TOP"),
-                    create_instruction("POP_TOP"),
-                    cleanup_complete_jump_target,
-                ]
-                + cleanup
-            )
+            cleanup[:] = [
+                create_load_none(),
+                create_load_none(),
+                create_load_none(),
+                *create_call_function(2, False),
+                create_instruction("POP_TOP"),
+                create_instruction("JUMP_FORWARD", target=cleanup_complete_jump_target),
+                create_instruction("PUSH_EXC_INFO"),
+                create_instruction("WITH_EXCEPT_START"),
+                create_instruction(
+                    "POP_JUMP_FORWARD_IF_TRUE",
+                    target=pop_top_after_with_except_start,
+                ),
+                create_instruction("RERAISE", 2),
+                create_instruction("COPY", 3),
+                create_instruction("POP_EXCEPT"),
+                create_instruction("RERAISE", 1),
+                pop_top_after_with_except_start,
+                create_instruction("POP_EXCEPT"),
+                create_instruction("POP_TOP"),
+                create_instruction("POP_TOP"),
+                cleanup_complete_jump_target,
+            ] + cleanup
 
-            return create_call_function(0, False) + [
+            return [
+                *load_args,
+                *create_call_function(len(load_args), True),
                 create_instruction("BEFORE_WITH"),
                 create_instruction("POP_TOP"),
             ]
@@ -253,7 +263,7 @@ class ContinueExecutionCache:
         assert code.co_flags & CO_OPTIMIZED
         if code in ContinueExecutionCache.generated_code_metadata:
             return cls.generate_based_on_original_code_object(
-                code, lineno, offset, nstack, argnames, setup_fns, null_idxes
+                code, lineno, offset, nstack, argnames, setup_fns, null_idxes,
             )
 
         meta = ResumeFunctionMetadata(code)
@@ -283,22 +293,28 @@ class ContinueExecutionCache:
             code_options["co_flags"] = code_options["co_flags"] & ~(
                 CO_VARARGS | CO_VARKEYWORDS
             )
-            # TODO probably need to update co_exceptiontable for python 3.11
             (target,) = [i for i in instructions if i.offset == offset]
 
             prefix = []
+            if sys.version_info >= (3, 11):
+                if freevars:
+                    prefix.append(create_instruction("COPY_FREE_VARS", len(freevars)))
+                prefix.append(create_instruction("RESUME", 0))
+
             cleanup = []
             hooks = {fn.stack_index: fn for fn in setup_fns}
+            null_idxes_i = 0
             for i in range(nstack):
+                while (
+                    null_idxes_i < len(null_idxes)
+                    and null_idxes[null_idxes_i] == i + null_idxes_i
+                ):
+                    prefix.append(create_instruction("PUSH_NULL"))
+                    null_idxes_i += 1
                 prefix.append(create_instruction("LOAD_FAST", f"___stack{i}"))
                 if i in hooks:
                     prefix.extend(hooks.pop(i)(code_options, cleanup))
             assert not hooks
-
-            if sys.version_info >= (3, 11):
-                for idx in null_idxes:
-                    prefix.append(create_instruction("PUSH_NULL"))
-                    prefix.extend(create_rot_n(idx))
 
             prefix.append(create_jump_absolute(target))
 
@@ -316,6 +332,17 @@ class ContinueExecutionCache:
             # TODO(jansel): add dead code elimination here
             instructions[:] = prefix + instructions
 
+            # update exception table for Python 3.11
+            if sys.version_info >= (3, 11):
+                prefix_size = 0
+                for inst in prefix:
+                    prefix_size += instruction_size(inst)
+                # TODO transform_code_object deletes this
+                code_options["co_exceptiontable"] = offset_exception_table(
+                    code_options["co_exceptiontable"], prefix_size
+                )
+
+
         new_code = transform_code_object(code, update)
         ContinueExecutionCache.generated_code_metadata[new_code] = meta
         return new_code
@@ -323,12 +350,9 @@ class ContinueExecutionCache:
     @staticmethod
     def unreachable_codes(code_options):
         """Codegen a `raise None` to make analysis work for unreachable code"""
+        PyCodegen.maybe_upd_consts(code_options, None)
         return [
-            create_instruction(
-                "LOAD_CONST",
-                argval=None,
-                arg=PyCodegen.get_const_index(code_options, None),
-            ),
+            create_instruction("LOAD_CONST", None),
             create_instruction("RAISE_VARARGS", 1),
         ]
 
