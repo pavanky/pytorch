@@ -32,8 +32,8 @@ static TensorIterator make_index_put_iterator(const AdvancedIndex& info, const T
 
 static Tensor & masked_fill_impl_quantized_cpu(Tensor & self, const Tensor & mask, const Scalar& value) {
   NoNamesGuard guard;
-  if (mask.dtype() == ScalarType::Byte) {
-    TORCH_WARN("masked_fill_ received a mask with dtype torch.uint8, this behavior is now deprecated," \
+  if (mask.dtype() != ScalarType::Bool) {
+    TORCH_WARN("masked_fill_ received a non-boolean mask, this behavior is now deprecated," \
             "please use a mask with dtype torch.bool instead.");
   }
 

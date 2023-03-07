@@ -1404,10 +1404,12 @@ void masked_fill_kernel_quantized(TensorIterator& iter, const Scalar& value, dou
         auto mask_dtype = iter.input_dtype(0);
 
         if (mask_dtype == at::ScalarType::Bool) {
-            cuda_masked_fill_kernel_quantized<scalar_t, bool>(iter, quantized_val);
+          cuda_masked_fill_kernel_quantized<scalar_t, bool>(iter, quantized_val);
         }
         else {
-            cuda_masked_fill_kernel_quantized<scalar_t, uint8_t>(iter, quantized_val);
+          TORCH_WARN_ONCE("masked_fill received non-boolean mask, which is now deprecated." \
+            "Please use a mask with dtype torch.bool");
+          cuda_masked_fill_kernel_quantized<scalar_t, uint8_t>(iter, quantized_val);
         }
     });
 }
@@ -1442,6 +1444,7 @@ Tensor & masked_fill__cuda(Tensor& self, const Tensor & mask, const Scalar& valu
       .build();
 
   if (b_mask->dtype() == at::ScalarType::Byte) {
+    // @TODO: deprecate non-boolean mask types
     TORCH_WARN("masked_fill_ received a mask with dtype torch.uint8, this behavior is now deprecated," \
             "please use a mask with dtype torch.bool instead.");
     masked_fill_kernel<uint8_t>(iter, value);

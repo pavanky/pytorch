@@ -1768,9 +1768,10 @@ Tensor masked_scatter(const Tensor & self, const Tensor & mask, const Tensor & s
 
 static Tensor & masked_fill_impl_cpu(Tensor & self, const Tensor & mask, const Scalar& value) {
   NoNamesGuard guard;
-  if (mask.dtype() == ScalarType::Byte) {
-    TORCH_WARN("masked_fill_ received a mask with dtype torch.uint8, this behavior is now deprecated," \
-            "please use a mask with dtype torch.bool instead.");
+  if (mask.dtype() != ScalarType::Bool) {
+    // @TODO: deprecate
+    TORCH_WARN_ONCE("masked_fill_ received a non-boolean mask, which is now deprecated." \
+      "Please use a mask with dtype torch.bool");
   }
 
   if (at::has_internal_overlap(self) == MemOverlap::Yes) {

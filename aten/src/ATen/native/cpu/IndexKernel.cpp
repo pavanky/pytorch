@@ -312,6 +312,9 @@ void cpu_masked_fill_kernel(TensorIterator& iter, scalar_t value) {
       mask_t mask_value = *(mask_t*)(mask + strides[1] * i);
       if (!is_mask_bool) {
         TORCH_CHECK(mask_value == 0 || mask_value == 1, "Mask tensor can take 0 and 1 values only");
+        // @TODO: deprecate
+        TORCH_WARN_ONCE("masked_fill received a non-boolean mask, which is now deprecated." \
+          "Please use a mask with dtype torch.bool");
       }
       if (mask_value) {
         *(scalar_t*)(dst + strides[0] * i) = value;
@@ -329,6 +332,9 @@ void masked_fill_kernel(TensorIterator& iter, const Scalar& value) {
       if (mask_dtype == ScalarType::Bool) {
         cpu_masked_fill_kernel<scalar_t, bool>(iter, scalar_val);
       } else {
+        // @TODO: deprecate
+        TORCH_WARN_ONCE("masked_fill received a non-boolean mask, which is now deprecated." \
+          "Please use a mask with dtype torch.bool");
         cpu_masked_fill_kernel<scalar_t, unsigned char>(iter, scalar_val);
       }
     });
