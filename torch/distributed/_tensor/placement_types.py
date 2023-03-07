@@ -155,31 +155,12 @@ class Shard(Placement):
         This function all_gather all shards and return a tensor that
         is replicated on the previously sharded mesh dimension
         """
-        my_coordinate = mesh.get_coordinate()
-        num_chunks = mesh.size(dim=mesh_dim)
-        # TODO: what should happen if rank is not in the mesh?
-        # see issue https://github.com/pytorch/tau/pull/492
-        assert (
-            my_coordinate is not None
-        ), "Rank if not part of mesh"  # TODO: figure out behavior here
-        # check if it needs to pad input tensor before all_gather
-        pad_idx = size[self.dim] % num_chunks
-        if pad_idx != 0 and my_coordinate[mesh_dim] >= pad_idx:
-            local_tensor = self._pad_tensor(local_tensor).contiguous()
-
-        big_tensor = mesh.all_gather(local_tensor, mesh_dim=mesh_dim)
-        # unpack the big tensor (TODO skil all of this if pad_idx == 0 and dim == 0)
-        gathered_list = torch.split(big_tensor, num_chunks)
-
-        # unpad the tensor if the input tensor was padded
-        if pad_idx != 0:
-            gathered_list = [
-                self._unpad_tensor(gathered_tensor)  # type: ignore[misc]
-                if i >= pad_idx
-                else gathered_tensor
-                for i, gathered_tensor in enumerate(gathered_list)
-            ]
-        return torch.cat(gathered_list, dim=self.dim)  # type: ignore[arg-type]
+        return mesh.all_gather(
+            tensor=local_tensor,
+            mesh_dim=mesh_dim,
+            gather_dim=self.dim,
+            gather_size=size
+        )
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Shard):

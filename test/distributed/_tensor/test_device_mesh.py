@@ -306,14 +306,13 @@ class DeviceMeshCollectiveTest(DTensorTestBase):
     @with_comms
     def test_all_gather_1d(self):
         mesh = DeviceMesh(self.device_type, torch.arange(self.world_size))
-        dims_to_gather = [0, 1]
+        dims_to_gather = [0, 1, 2]
         for dim in dims_to_gather:
-            output_size = [3, 3]
+            output_size = [3, 3, 3]
             output_size[dim] *= self.world_size
             # each rank have its own tensor, all_gather gives a list
             local_tensor = torch.ones(3, 3, device=self.device_type)
-            gathered_tensor = mesh.all_gather(local_tensor, mesh_dim=0)
-            gathered_tensor = torch.cat(torch.chunk(gathered_tensor, self.world_size), dim=dim)
+            gathered_tensor = mesh.all_gather(local_tensor, mesh_dim=0, gather_dim=dim)
             self.assertEqual(gathered_tensor, torch.ones(output_size))
 
     @with_comms
@@ -331,25 +330,19 @@ class DeviceMeshCollectiveTest(DTensorTestBase):
             tensor_padded_list, pad_idx = shard_placement._split_tensor(
                 tensor_to_split,
                 device_mesh.size(),
-                with_padding=True,
-                contiguous=True,
+                with_padding=False,
+                contiguous=False,
             )
             local_tensor = tensor_padded_list[my_rank]
             big_tensor = device_mesh.all_gather(
                 local_tensor,
                 mesh_dim=0,
+                gather_dim=shard_dim,
+                gather_size=tensor_to_split.size()
             )
-            gathered_list = big_tensor.chunk(self.world_size)
-            if pad_idx != 0:
-                gathered_list = [
-                    shard_placement._unpad_tensor(gathered_tensor)
-                    if i >= pad_idx
-                    else gathered_tensor
-                    for i, gathered_tensor in enumerate(gathered_list)
-                ]
-            all_gathered_tensor = torch.cat(gathered_list, dim=shard_dim)
-            self.assertEqual(all_gathered_tensor.size(), tensor_to_split.size())
-            self.assertEqual(all_gathered_tensor, tensor_to_split)
+
+            self.assertEqual(big_tensor.size(), tensor_to_split.size()
+            self.assertEqual(big_tensor, tensor_to_split)
 
     @with_comms
     def test_reduce_scatter_1d(self):
