@@ -173,18 +173,16 @@ def _all_gather_into_tensor(shard, tag, ranks, group_size):
 def _reduce_scatter_tensor(
     input: torch.Tensor,
     reduceOp: str,
-    scatter_dim: int,
     tag: str,
     ranks: List[int],
     group_size: int,
 ):
     # TODO add dim support?
-    assert scatter_dim == 0, "Only scatter_dim = 0 is supported for now."
     group = c10d._find_or_create_pg_by_ranks_and_tag(tag, ranks, group_size)
     assert group is not None
     op = _str_to_reduce_op(reduceOp)
     out_size = list(input.size())
-    out_size[scatter_dim] //= group_size
+    out_size[0] //= group_size
     out_tensor = input.new_empty(out_size)
     work = dist.reduce_scatter_tensor(
         out_tensor, input, op=op, group=group, async_op=True
@@ -303,7 +301,6 @@ def all_gather_tensor(
 def reduce_scatter_tensor(
     self: torch.Tensor,
     reduceOp: str,
-    scatter_dim: int,
     group: RANK_TYPES,
     tag: str = "",
 ):
@@ -311,7 +308,6 @@ def reduce_scatter_tensor(
     Reduces the tensor data across all machines in such a way that all get
     the final result, then scatter the results to correponding ranks.
 
-    Note that it currently only supports scatter_dim = 0.
 
     The input tensor is left unmodified.
     Group can be one of:
@@ -327,7 +323,7 @@ def reduce_scatter_tensor(
     assert (
         self.size(0) % group_size == 0
     ), f"input dimension 0 ({self.size(0)} must be a multiple of group_size {group_size}"
-    tensor = torch._C._nn.reduce_scatter_tensor(self, reduceOp, scatter_dim, tag, rankset, group_size)  # type: ignore[attr-defined]
+    tensor = torch._C._nn.reduce_scatter_tensor(self, reduceOp, tag, rankset, group_size)  # type: ignore[attr-defined]
     res = AsyncCollectiveTensor(tensor)
     _register_wrapper_tensor(res, tensor)
     return res

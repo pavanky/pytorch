@@ -488,6 +488,7 @@ class DeviceMesh:
         input: torch.Tensor,
         op: ReduceOp = ReduceOp.SUM,  # type: ignore[assignment]
         mesh_dim: int = 0,
+        scatter_dim: int = 0,
     ) -> torch.Tensor:
         """
         reduce the input on each rank on a device mesh dimension, and scatter
@@ -516,7 +517,7 @@ class DeviceMesh:
         needs_padding = False
         if input.size(0) % num_chunks != 0:
             from torch.distributed._tensor.placement_types import Shard
-            shard = Shard(0)
+            shard = Shard(scatter_dim)
             scattered_list, pad_idx = shard._split_tensor(
                 input, num_chunks, with_padding=True, contiguous=True
             )
@@ -525,7 +526,7 @@ class DeviceMesh:
 
         if self._backend == "nccl" or self._backend == "threaded":
             dim_group = self._dim_groups[mesh_dim]
-            scatter_tensor = funcol.reduce_scatter_tensor(input, reduceOp=op_name, scatter_dim=0, group=dim_group)
+            scatter_tensor = funcol.reduce_scatter_tensor(input, reduceOp=op_name, group=dim_group)
 
         elif self._backend == "gloo":
             # it's gloo, which does not have reduce_scatter

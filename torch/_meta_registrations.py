@@ -2773,9 +2773,9 @@ def all_gather_into_tensor_meta(shard, tag, rankset, group_size):
 
 
 @register_meta(aten.reduce_scatter_tensor)
-def reduce_scatter_tensor_meta(input, reduce_op, scatter_dim, tag, rankset, group_size):
+def reduce_scatter_tensor_meta(input, reduce_op, tag, rankset, group_size):
     out_size = list(input.size())
-    out_size[scatter_dim] //= group_size
+    out_size[0] //= group_size
     return input.new_empty(out_size)
 
 

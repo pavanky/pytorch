@@ -341,21 +341,20 @@ class DeviceMeshCollectiveTest(DTensorTestBase):
                 gather_size=tensor_to_split.size()
             )
 
-            self.assertEqual(big_tensor.size(), tensor_to_split.size()
+            self.assertEqual(big_tensor.size(), tensor_to_split.size())
             self.assertEqual(big_tensor, tensor_to_split)
 
     @with_comms
     def test_reduce_scatter_1d(self):
         mesh = DeviceMesh(self.device_type, torch.arange(self.world_size))
         # TODO go back and include >0 once we support scatter_dim>0
-        # dims_to_scatter = [0, 1]
-        dims_to_scatter = [0]
+        dims_to_scatter = [0, 1]
         for dim in dims_to_scatter:
             input_size = [3, 3]
             input_size[dim] *= self.world_size
             input_tensor = torch.ones(input_size, device=self.device_type) * self.rank
             res_num = ((0 + self.world_size - 1) * self.world_size) / 2
-            scattered_tensor = mesh.reduce_scatter(input_tensor, mesh_dim=0)
+            scattered_tensor = mesh.reduce_scatter(input_tensor, mesh_dim=0, scatter_dim=dim)
             self.assertEqual(scattered_tensor, torch.ones(3, 3) * res_num)
 
     @with_comms

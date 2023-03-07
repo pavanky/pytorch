@@ -14712,7 +14712,7 @@
     CompositeExplicitAutograd: all_gather_into_tensor
   variants: function
 
-- func: reduce_scatter_tensor(Tensor input, str reduceOp, int scatter_dim, str tag, int[] ranks, int group_size) -> Tensor
+- func: reduce_scatter_tensor(Tensor input, str reduceOp, str tag, int[] ranks, int group_size) -> Tensor
   # This should be changed to distributed but it requires changes all over the place to work
   python_module: nn
   dispatch:
