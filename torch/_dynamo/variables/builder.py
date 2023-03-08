@@ -34,12 +34,14 @@ from ..source import (
     Source,
     TupleIteratorGetItemSource,
 )
+
 from ..utils import (
     clone_input,
     get_fake_value,
     getfile,
     global_key_name,
     HAS_NUMPY,
+    HAS_NUMPY_TORCH_INTEROP,
     is_namedtuple,
     is_numpy_int_type,
     is_typing,
@@ -49,6 +51,7 @@ from ..utils import (
     preserve_rng_state,
     tensor_shape_should_be_static,
     tensor_static_reason_to_message,
+    torch_np,
     tuple_iterator,
     tuple_iterator_getitem,
     tuple_iterator_len,
@@ -932,7 +935,9 @@ def wrap_fx_proxy_cls(
                 example_value, tx=tx, **kwargs
             )
 
-    if isinstance(example_value, torch.Tensor):
+    if isinstance(example_value, torch.Tensor) or (
+        HAS_NUMPY_TORCH_INTEROP and isinstance(example_value, torch_np._ndarray.ndarray)
+    ):
         is_parameter = isinstance(example_value, torch.nn.Parameter)
         should_specialize = options.pop("should_specialize", False)
         if is_parameter or should_specialize:
@@ -1009,7 +1014,8 @@ def wrap_fx_proxy_cls(
                 )
             else:
                 unpacked.append(
-                    wrap_fx_proxy(
+                    wrap_fx_proxy_cls(
+                        target_cls,
                         tx,
                         proxy.tracer.create_proxy(
                             "call_function", operator.getitem, (proxy, i), {}

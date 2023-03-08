@@ -289,6 +289,29 @@ class TorchVariable(VariableTracker):
                 ),
                 **options,
             )
+        elif self.value is torch.from_numpy:
+            if not config.trace_numpy:
+                unimplemented("numpy")
+            assert len(args) == 1, f"Got arguments {args}"
+            assert not kwargs
+            t = args[0]
+            from .tensor import NumpyTensorVariable
+
+            if isinstance(t, NumpyTensorVariable):
+                # TODO: mark the tensor as non-resizable
+                return wrap_fx_proxy_cls(
+                    target_cls=TensorVariable,
+                    tx=tx,
+                    proxy=tx.output.create_proxy(
+                        "call_method",
+                        "detach",
+                        *proxy_args_kwargs(args, {}),
+                    ),
+                    example_value=None,
+                    **options,
+                )
+            else:
+                unimplemented(f"torch.from_numpy(<{type(t)}>)")
         elif not config.dynamic_shapes and self.is_dynamic_shapes(args, kwargs):
             unimplemented(f"dynamic shapes: {self.value.__name__}")
         elif len(args) > 0 and isinstance(args[0], TensorWithTFOverrideVariable):

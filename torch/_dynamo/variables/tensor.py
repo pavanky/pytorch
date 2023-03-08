@@ -337,7 +337,27 @@ class TensorVariable(VariableTracker):
             and not config.dynamic_shapes
         ):
             unimplemented("dynamic Tensor.repeat")
-        elif name in ("tolist", "numpy", "backward", "data_ptr"):
+        elif name == "numpy":
+            if not config.trace_numpy:
+                unimplemented(f"Tensor.{name}")
+            from .builder import wrap_fx_proxy_cls
+
+            assert not args, "Tensor.numpy() doesn't take args."
+            # TODO: support force
+            if kwargs and "force" in kwargs:
+                unimplemented(f"Tensor.numpy(force={kwargs['force']})")
+            return wrap_fx_proxy_cls(
+                target_cls=NumpyTensorVariable,
+                tx=tx,
+                proxy=tx.output.create_proxy(
+                    "call_method",
+                    "detach",
+                    *proxy_args_kwargs([self], {}),
+                ),
+                example_value=None,
+                **options,
+            )
+        elif name in ("tolist", "backward", "data_ptr"):
             unimplemented(f"Tensor.{name}")
         elif name == "nonzero" and not config.dynamic_shapes:
             unimplemented(f"Tensor.{name}")
@@ -602,6 +622,52 @@ class TensorWithTFOverrideVariable(VariableTracker):
         # example tensor from going into the override.
         with torch._C.DisableTorchFunctionSubclass():
             return tx.inline_user_function_return(tf_func_var, tf_args, {})
+
+
+class NumpyTensorVariable(TensorVariable):
+    """
+    Represents a numpy.ndarray, but backed by torch Tensor. Use this for Tensor.numpy() call.
+    """
+
+    def __init__(
+        self,
+        proxy: torch.fx.Proxy,
+        dtype=None,
+        ndim=None,
+        class_type=None,
+        shape=None,
+        **kwargs,
+    ):
+        self.shape = shape
+        super().__init__(proxy, dtype=dtype, ndim=ndim, class_type=class_type, **kwargs)
+
+    def var_getattr(self, tx, name):
+        try:
+            super().var_getattr(tx, name)
+        except NotImplementedError:
+            unimplemented(f"numpy_ndarray.{name}")
+
+    def call_isinstance(self, tensor_type):
+        return False
+
+    @staticmethod
+    def specialize(value: "torch_np._ndarray.ndarray"):
+        props = {
+            "dtype": value.dtype,
+            "ndim": int(value.ndim),
+            "class_type": type(value),
+            "shape": value.shape,
+        }
+        return props
+
+    def call_method(
+        self,
+        tx,
+        name,
+        args: "List[VariableTracker]",
+        kwargs: "Dict[str, VariableTracker]",
+    ) -> "VariableTracker":
+        unimplemented(f"numpy_ndarray.{name}")
 
 
 class UnspecializedPythonVariable(TensorVariable):
