@@ -155,12 +155,30 @@ class Shard(Placement):
         This function all_gather all shards and return a tensor that
         is replicated on the previously sharded mesh dimension
         """
-        return mesh.all_gather(
+        my_coordinate = mesh.get_coordinate()
+        num_chunks = mesh.size(dim=self.dim)
+        gather_dim_len = size[self.dim]
+        pad_idx = gather_dim_len % num_chunks
+        if pad_idx != 0 and my_coordinate[mesh_dim] >= pad_idx:
+            tensor = self._pad_tensor(tensor)
+
+        result = mesh.all_gather(
             tensor=local_tensor,
             mesh_dim=mesh_dim,
             gather_dim=self.dim,
-            gather_size=size
         )
+        if pad_idx != 0:
+            gathered_list = torch.chunk(result, num_chunks, dim=self.dim)
+            if pad_idx != 0:
+                gathered_list = [
+                    self._unpad_tensor(gathered_tensor)
+                    if i >= pad_idx
+                    else gathered_tensor
+                    for i, gathered_tensor in enumerate(gathered_list)
+                ]
+
+            result = torch.cat(gathered_list, dim=self.dim)
+        return result
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Shard):

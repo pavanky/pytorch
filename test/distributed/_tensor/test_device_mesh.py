@@ -311,7 +311,7 @@ class DeviceMeshCollectiveTest(DTensorTestBase):
             output_size = [3, 3, 3]
             output_size[dim] *= self.world_size
             # each rank have its own tensor, all_gather gives a list
-            local_tensor = torch.ones(3, 3, device=self.device_type)
+            local_tensor = torch.ones([3, 3, 3], device=self.device_type)
             gathered_tensor = mesh.all_gather(local_tensor, mesh_dim=0, gather_dim=dim)
             self.assertEqual(gathered_tensor, torch.ones(output_size))
 

@@ -402,7 +402,6 @@ class DeviceMesh:
         tensor: torch.Tensor,
         mesh_dim: int = 0,
         gather_dim: int = 0,
-        gather_size: Optional[torch.Size] = None
     ) -> torch.Tensor:
         """
         all_gather the tensor on each rank to the tensor_list on a
@@ -421,42 +420,8 @@ class DeviceMesh:
         Returns:
             A :class:`torch.Tensor` object
         """
-        my_coordinate = self.get_coordinate()
-        num_chunks = self.size(dim=mesh_dim)
-        # TODO: what should happen if rank is not in the mesh?
-        # see issue https://github.com/pytorch/tau/pull/492
-        assert (
-            my_coordinate is not None
-        ), "Rank if not part of mesh"  # TODO: figure out behavior here
-
-        if gather_size is None:
-            gather_dim_len = tensor.size(gather_dim) * num_chunks
-        else:
-            gather_dim_len = gather_size[gather_dim]
-
-        # check if it needs to pad input tensor before all_gather
-        pad_idx = gather_dim_len % num_chunks
-        if pad_idx != 0 and my_coordinate[mesh_dim] >= pad_idx:
-            # This rounds down the size by 1
-            expected_size = gather_dim_len // num_chunks
-            assert tensor.size(gather_dim) == expected_size
-            tensor = _pad_tensor(tensor, gather_dim)
-
-        tensor = tensor.contiguous()
         dim_group = self._dim_groups[mesh_dim]
-        result = funcol.all_gather_tensor(tensor, gather_dim=0, group=dim_group)
-        if gather_dim > 0 or pad_idx != 0:
-            gathered_list = torch.chunk(result, num_chunks)
-            if pad_idx != 0:
-                gathered_list = [
-                    _unpad_tensor(gathered_tensor, gather_dim)
-                    if i >= pad_idx
-                    else gathered_tensor
-                    for i, gathered_tensor in enumerate(gathered_list)
-                ]
-
-            result = torch.cat(gathered_list, dim=gather_dim)
-        return result
+        return funcol.all_gather_tensor(tensor, gather_dim=gather_dim, group=dim_group)
 
     def all_reduce(
         self,

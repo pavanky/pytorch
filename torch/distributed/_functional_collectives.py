@@ -291,11 +291,13 @@ def all_gather_tensor(
     :: N.B. If you pass a PG or a 1D list to perform a MPMD collective, the compiler won't be able to recover
     that information and perform collective algebraic optimization. Use other forms of input for that.
     """
-    assert gather_dim == 0
     tag, rankset, group_size = _expand_group(group, tag)
     tensor = torch._C._nn.all_gather_into_tensor(self, tag, rankset, group_size)  # type: ignore[attr-defined]
     res = AsyncCollectiveTensor(tensor)
     _register_wrapper_tensor(res, tensor)
+    # TODO this should be done inside AsyncCollectiveTensor to delay the wait() call
+    if gather_dim > 0:
+        res = torch.cat(torch.chunk(res, group_size, dim=0), dim=gather_dim)
     return res
 
 def reduce_scatter_tensor(
