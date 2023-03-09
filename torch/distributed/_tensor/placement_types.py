@@ -79,6 +79,17 @@ class Shard(Placement):
         # unpad tensor by 1 on the shard dim
         return tensor.narrow(self.dim, start=0, length=tensor.size(self.dim) - 1)
 
+    def _unpad_concat_tensor(self, tensor: torch.Tensor, padding_idx: int, shard_count: int) -> torch.Tensor:
+        gathered_list = torch.chunk(tensor, shard_count, dim=self.dim)
+        gathered_list = [
+            self._unpad_tensor(gathered_tensor)
+            if i >= padding_idx
+            else gathered_tensor
+            for i, gathered_tensor in enumerate(gathered_list)
+        ]
+        return torch.cat(gathered_list, dim=self.dim)
+
+
     def _local_shard_size_on_dim(
         self,
         size_on_dim: int,
@@ -137,12 +148,25 @@ class Shard(Placement):
         reduce and scatter a tensor on a mesh dimension
         """
         my_coordinate = mesh.get_coordinate()
+        num_chunks = mesh.size(dim=mesh_dim)
         # TODO: what should happen if rank is not in the mesh?
         # see issue https://github.com/pytorch/tau/pull/492
         assert (
             my_coordinate is not None
         ), "Rank if not part of mesh"  # TODO: figure out behavior here
-        return mesh.reduce_scatter(tensor, op=reduce_op, mesh_dim=mesh_dim)
+
+        pad_idx = 0
+        if tensor.size(self.dim) % num_chunks != 0:
+            scattered_list, pad_idx = self._split_tensor(
+                tensor, num_chunks, with_padding=True, contiguous=False
+            )
+            tensor = torch.cat(scattered_list, dim=self.dim)
+
+        output = mesh.reduce_scatter(tensor, op=reduce_op, mesh_dim=mesh_dim, scatter_dim=self.dim)
+
+        if pad_idx != 0 and my_coordinate[mesh_dim] >= pad_idx:
+            output = self._unpad_tensor(output)
+        return output
 
     def _to_replicate_tensor(
         self,
@@ -157,10 +181,16 @@ class Shard(Placement):
         """
         my_coordinate = mesh.get_coordinate()
         num_chunks = mesh.size(dim=self.dim)
+        # TODO: what should happen if rank is not in the mesh?
+        # see issue https://github.com/pytorch/tau/pull/492
+        assert (
+            my_coordinate is not None
+        ), "Rank if not part of mesh"  # TODO: figure out behavior here
+
         gather_dim_len = size[self.dim]
         pad_idx = gather_dim_len % num_chunks
         if pad_idx != 0 and my_coordinate[mesh_dim] >= pad_idx:
-            tensor = self._pad_tensor(tensor)
+            local_tensor = self._pad_tensor(local_tensor)
 
         result = mesh.all_gather(
             tensor=local_tensor,
@@ -169,13 +199,12 @@ class Shard(Placement):
         )
         if pad_idx != 0:
             gathered_list = torch.chunk(result, num_chunks, dim=self.dim)
-            if pad_idx != 0:
-                gathered_list = [
-                    self._unpad_tensor(gathered_tensor)
-                    if i >= pad_idx
-                    else gathered_tensor
-                    for i, gathered_tensor in enumerate(gathered_list)
-                ]
+            gathered_list = [
+                self._unpad_tensor(gathered_tensor)
+                if i >= pad_idx
+                else gathered_tensor
+                for i, gathered_tensor in enumerate(gathered_list)
+            ]
 
             result = torch.cat(gathered_list, dim=self.dim)
         return result

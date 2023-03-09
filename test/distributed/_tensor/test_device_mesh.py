@@ -330,16 +330,19 @@ class DeviceMeshCollectiveTest(DTensorTestBase):
             tensor_padded_list, pad_idx = shard_placement._split_tensor(
                 tensor_to_split,
                 device_mesh.size(),
-                with_padding=False,
-                contiguous=False,
+                with_padding=True,
+                contiguous=True,
             )
             local_tensor = tensor_padded_list[my_rank]
             big_tensor = device_mesh.all_gather(
                 local_tensor,
                 mesh_dim=0,
-                gather_dim=shard_dim,
-                gather_size=tensor_to_split.size()
+                gather_dim=shard_dim
             )
+            if pad_idx != 0:
+                big_tensor = shard_placement._unpad_concat_tensor(
+                    big_tensor, device_mesh.size(), pad_idx
+                )
 
             self.assertEqual(big_tensor.size(), tensor_to_split.size())
             self.assertEqual(big_tensor, tensor_to_split)
@@ -374,9 +377,19 @@ class DeviceMeshCollectiveTest(DTensorTestBase):
                 device_mesh.size(), dim=shard_dim
             )
 
+            shard_placement = Shard(shard_dim)
+            padded_tensor_list, pad_idx = shard_placement._split_tensor(
+                tensor_to_split, device_mesh.size(), with_padding=True, contiguous=True
+            )
+            tensor_to_reduce = torch.cat(padded_tensor_list, shard_dim)
+
             res_num = ((0 + self.world_size - 1) * self.world_size) / 2
 
-            scattered_tensor = device_mesh.reduce_scatter(tensor_to_split, mesh_dim=0, scatter_dim=shard_dim)
+            scattered_tensor = device_mesh.reduce_scatter(tensor_to_reduce, mesh_dim=0, scatter_dim=shard_dim)
+
+            scattered_tensor = shard_placement._unpad_concat_tensor(
+                scattered_tensor, device_mesh.size(), pad_idx
+            )
 
             self.assertEqual(
                 scattered_tensor.size(), tensor_splitted_list[my_rank].size()

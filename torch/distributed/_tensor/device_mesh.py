@@ -471,27 +471,27 @@ class DeviceMesh:
             A :class:`torch.Tensor` object
         """
         op_name: str = op.name  # type: ignore[attr-defined]
-        my_coordinate = self.get_coordinate()
+        # my_coordinate = self.get_coordinate()
         # TODO: what should happen if rank is not in the mesh?
         # see issue https://github.com/pytorch/tau/pull/492
-        assert (
-            my_coordinate is not None
-        ), "Rank if not part of mesh"  # TODO: figure out behavior here
+        # assert (
+        #     my_coordinate is not None
+        # ), "Rank if not part of mesh"  # TODO: figure out behavior here
 
-        num_chunks = self.size(dim=mesh_dim)
-        needs_padding = False
-        if input.size(0) % num_chunks != 0:
-            from torch.distributed._tensor.placement_types import Shard
-            shard = Shard(scatter_dim)
-            scattered_list, pad_idx = shard._split_tensor(
-                input, num_chunks, with_padding=True, contiguous=True
-            )
-            input = torch.cat(scattered_list)
-            needs_padding = True
+        # num_chunks = self.size(dim=mesh_dim)
+        # needs_padding = False
+        # if input.size(0) % num_chunks != 0:
+        #     from torch.distributed._tensor.placement_types import Shard
+        #     shard = Shard(scatter_dim)
+        #     scattered_list, pad_idx = shard._split_tensor(
+        #         input, num_chunks, with_padding=True, contiguous=True
+        #     )
+        #     input = torch.cat(scattered_list)
+        #     needs_padding = True
 
         if self._backend == "nccl" or self._backend == "threaded":
             dim_group = self._dim_groups[mesh_dim]
-            scatter_tensor = funcol.reduce_scatter_tensor(input, reduceOp=op_name, group=dim_group)
+            scatter_tensor = funcol.reduce_scatter_tensor(input, reduceOp=op_name, scatter_dim=scatter_dim, group=dim_group)
 
         elif self._backend == "gloo":
             # it's gloo, which does not have reduce_scatter
@@ -508,9 +508,9 @@ class DeviceMesh:
                 f"backend {self._backend} does not support reduce_scatter!"
             )
 
-        if needs_padding:
-            if pad_idx != 0 and my_coordinate[mesh_dim] >= pad_idx:
-                scatter_tensor = shard._unpad_tensor(scatter_tensor)
+        # if needs_padding:
+        #     if pad_idx != 0 and my_coordinate[mesh_dim] >= pad_idx:
+        #         scatter_tensor = shard._unpad_tensor(scatter_tensor)
 
         return scatter_tensor
 
