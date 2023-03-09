@@ -135,12 +135,10 @@ if(@USE_CUDA@)
   elseif(APPLE)
     set(TORCH_CUDA_LIBRARIES
       ${CUDA_TOOLKIT_ROOT_DIR}/lib/libcudart.dylib
-      ${CUDA_TOOLKIT_ROOT_DIR}/lib/libnvrtc.dylib
       ${CUDA_LIBRARIES})
   else()
     set(TORCH_CUDA_LIBRARIES
       ${CUDA_CUDA_LIB}
-      ${CUDA_NVRTC_LIB}
       ${CUDA_LIBRARIES})
   endif()
   if(@BUILD_SHARED_LIBS@)
